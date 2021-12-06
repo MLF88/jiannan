@@ -7,6 +7,9 @@
 
 using namespace cv;
 using namespace std;
+
+
+
  
 int track_flags=0;//开启追踪算法并控制相机的标记; 1开启, 0关闭;
 int read_from_learning_flags;//读取神经网络模型的标记变量，0读取，1不读取;
@@ -14,7 +17,7 @@ int read_from_learning_flags;//读取神经网络模型的标记变量，0读取
 //myframe是从相机取出的视频帧并经过缩放的视频帧, 在程序中三个线程中共享;
 Mat myframe;
 pthread_mutex_t mut_myframe, mut_my_targ;//互斥量；
-//发送给app端模型数量的标记, 为减少发送次数, 设一个标记变量，每帧加1，大于3帧时才发送给app数据;
+//此变量多线程共用的全局变量，发送给app端模型数量的标记, 为减少发送次数, 设一个标记变量，每帧加1，大于3帧时才发送给app数据;
 int sendapp_model_flags=1; 
 int pthr_flags=0; //深度学习线程结束标记;
 
@@ -62,12 +65,12 @@ void *thr_read(void *p)
     //从摄像头读取视频;
     while(1)
     {
-    loop3: bgrImg = read_frame (yuvImg1,bgrImg);//read frame;
-        if (bgrImg.empty())
+        do
         {
-            printf("thr_read caputure is failed\n");
-            goto loop3;
-        }  
+            bgrImg = read_frame (yuvImg1, bgrImg);//read frame;
+
+        }while(!bgrImg.empty());
+
         pthread_testcancel();//设置取消点;      
         pthread_mutex_lock(&mut_myframe);//加锁;
 		//frame_input_indexx++;
@@ -85,34 +88,28 @@ int read_from_leaning(Mat &me_roi, Rect &me_trackbox,int me_fd, int *label_box)
     int i = *label_box;
 	pthread_mutex_lock(&gx[i].mut_my_gray);//加锁;
 	//判断共享全局变量为空，即被刷新还没有出新的结果;
-    if(gx[i].my_gray.empty() && (track_flags==1))  
+    if(gx[i].my_gray.empty() )  
     {
         //printf("my_gray is empty \n");
         me_roi.release();
-
-        usleep(20000);
-        snd_uart(me_fd, 0x31, 1500, 0, 0, 0x32, 1500);//发送俯仰和航向停止;
-        usleep(15000);
-        pthread_mutex_unlock(&(gx[i].mut_my_gray));//解锁;
-        read_from_learning_flags=0;  //    	   
-        return 2;//目标为空;
+        usleep(35000);
+        pthread_mutex_unlock(&(gx[i].mut_my_gray));//解锁;    	   
+        return -2;//目标为空;  函数返回
     }
+
     //my_gray(my_learnbox).copyTo(me_roi);
     gx[i].my_gray.copyTo(me_roi);//从全局变量中读取目标截图;
-    if(me_roi.empty() && (track_flags==1))//如果从共享存储空间中读取的目标为空，则跳转重新读取;
+    if(me_roi.empty() )//如果从共享存储空间中读取的目标为空;
     {
-        usleep(20000);
-        snd_uart(me_fd, 0x31, 1500, 0, 0, 0x32, 1500);//发送俯仰和航向停止;
-        usleep(10000);
+        usleep(30000);
         pthread_mutex_unlock(&(gx[i].mut_my_gray));//解锁;
-        read_from_learning_flags=0;  //
-        return 2;//目标为空；
+        return -2;//目标为空; 函数返回;
     }
-    me_trackbox=gx[i].my_learnbox;  //读取目标框坐标值;
+    else
+        me_trackbox=gx[i].my_learnbox;  //读取目标框坐标值;   
+    
     pthread_mutex_unlock(&(gx[i].mut_my_gray));//解锁;
-    if(track_flags == 1)
-        read_from_learning_flags=1; //执行读取目标的标记变量;
-
+    
     return 0;
 }
 
@@ -166,9 +163,7 @@ void *thr_track(void *p)
     //int track_frame=0;
     while(1)
     {
-    loop:    rcv_return_value = rcv_uart(fd_uart, camsize_area);
-        
-        //发送目标指令;
+        //查询模型变量标记, 并回复给app目标数量的串口指令;
         if(sendapp_model_flags>5)
         {
             pthread_mutex_lock(&mut_my_targ);//加锁;
@@ -192,92 +187,105 @@ void *thr_track(void *p)
                 usleep(10000);
             }
         }
+        // 接受串口指令
+        rcv_return_value = rcv_uart(fd_uart, camsize_area);// 接受串口指令
+        switch(rcv_return_value)
+        {
+            case 1:     
+                {   //接受到将t_flags设置为0的指令;
+                    read_from_learning_flags = 0;
+                    track_flags=0;
+                    usleep(20000);
+                    snd_uart(fd_uart, 0x32, 1500, 0, 0, 0x31, 1500);
+                    usleep(5000);
+                    reset_pid_x_y();           
+                }
+                continue;
+            case 2:
+                {   
+                    //接受到将t_flags设置为1的指令;
+                    track_flags=1;
+                    *label_box = 3;
+                    reset_pid_x_y(); 
+                    if(read_from_learning_flags == 0)//读取模型的标记，只读一次，提供模型;
+                    {      
+                        snd_uart(fd_uart, 0x32, 1500, 0, 0, 0x31, 1500); //发送相机停止俯仰航向指令;
+                        read_from_leaning_rev = read_from_leaning(my_roi, my_trackbox, fd_uart, label_box);
+                        if(read_from_leaning_rev < 0) //返回-2为读取模型失败;
+                        {
+                            read_from_learning_flags == 0;//0为读取，1为不读取;
+                            continue;   
+                        }
+                        else           //读取模型成功;
+                            read_from_learning_flags == 1; //0为读取，1为不读取;
+                    }
+                    //开始接手控制相机;
+                    //if(*label_box==3)
+                    //track_frame++;
+                    if(tracking(my_roi, my_trackbox) < 0.10)
+                    {
+                        //tracking返回值小0.85，说明目标跟丢了或者有遮挡物体;
+                        //应立即停止相机的俯仰和航向， 由前一帧提供模型或者由神经网络提供模型和坐标;
+                        snd_uart(fd_uart, 0x32, 1500, 0, 0, 0x31, 1500); //发送相机停止俯仰航向指令;
+                        sleep(2);//给深度学习时间，相机控制指令叠加延时性;
+                        reset_pid_x_y(); //PID系统参数清零，重新锁定目标;
+                        read_from_learning_flags == 0;//0为读取，1为不读取;
+                        continue;//重新由神经网络提供模型和坐标;
+                    }
+                    else    //从模板匹配返回中获得图像中目标实际的位置;
+                    {
+                        //if(*label_box==3)
+                        //    saveframe(my_roi, track_frame, "save_frame_insu");
+                        //发送向相机控制板发送指令,return 2,相机变焦了;跳转重新读取神经网络提供的模板和坐标;
+                        if(send_pid(fd_uart, my_trackbox, camsize_area, &gx[*label_box], label_box) == 2) 
+                        {
+                            read_from_learning_flags == 0;//0为读取，1为不读取;
+                            continue;//跳转重新读取神经网络提供的模板和坐标;
+                        } 
+                            
+                    }      
+                    //cv::Point point=getCenterPoint(my_trackbox);
+                    //printf("point.x=%d,point.y=%d\n", point.x, point.y);
+                }
+                continue;
+            case 5:
+                {    //接受到结束吊舱的指令;
+                    //printf("rcv data from app close process\n");
+			        pthr_flags=1;
+                    sleep(1);
+                    pthread_cancel(pthr_id[0]); //read;
+
+                    printf("close fd_uart\n");
+                    snd_uart(fd_uart, 0x32, 1500, 0, 0, 0x31, 1500);//在结束线程前发送相机动作停止指令;
+                    sleep(1);
+                    close(fd_uart);//关闭串口文件;
+
+                    pthread_exit((void *)1);//结束吊舱程序1;
+
+                }
+                break;
+            case 6:
+                {//接受到关闭TX1电源的指令;
+                    printf("rcv data from app close TX1\n");
+                    pthread_cancel(pthr_id[0]);
+                    pthread_cancel(pthr_id[2]);
         
-        //接受指令;
-        if(rcv_return_value == 5)//接受到结束吊舱的指令;
-        {
-            //printf("rcv data from app close process\n");
-			pthr_flags=1;
-			sleep(1);
-            pthread_cancel(pthr_id[0]); //read;
-
-            printf("close fd_uart\n");
-            snd_uart(fd_uart, 0x32, 1500, 0, 0, 0x31, 1500);//在结束线程前发送相机动作停止指令;
-			sleep(1);
-            close(fd_uart);//关闭串口文件;
-
-            pthread_exit((void *)1);//结束吊舱程序1;
-        }
-        else if (rcv_return_value == 6) //接受到关闭TX1电源的指令;
-        {
-            printf("rcv data from app close TX1\n");
-            pthread_cancel(pthr_id[0]);
-            pthread_cancel(pthr_id[2]);
-
-            printf("close fd_uart\n");
-            usleep(20000);
-            snd_uart(fd_uart, 0x32, 1500, 0, 0, 0x31, 1500);//在结束线程前发送相机动作停止指令;
-            close(fd_uart);//关闭串口文件;
-
-            printf("thr_track pthread_exit\n");
-            pthread_exit((void *)2);//关机2;            
-        }
-        else if (rcv_return_value == 1) //接受到将t_flags设置为0的指令;
-        {
-            read_from_learning_flags = 0;
-            track_flags=0;
-            usleep(20000);
-            snd_uart(fd_uart, 0x32, 1500, 0, 0, 0x31, 1500);
-            usleep(5000);
-            reset_pid_x_y();    
-        }
-        else if (rcv_return_value == 2) //接受到将t_flags设置为1的指令;
-        {
-            track_flags=1;
-            *label_box = 3;
-            reset_pid_x_y();   
-        }
+                    printf("close fd_uart\n");
+                    usleep(20000);
+                    snd_uart(fd_uart, 0x32, 1500, 0, 0, 0x31, 1500);//在结束线程前发送相机动作停止指令;
+                    close(fd_uart);//关闭串口文件;
         
-        //读取模型;
-        if(read_from_learning_flags == 0)//读取模型的标记，只读一次，提供模型;
-        {      
-loop2:      if(read_from_leaning(my_roi, my_trackbox, fd_uart, label_box)==2)
-            { 
-                goto loop;
-            }
-        }
-        
-        if(track_flags == 1)//开始接手控制相机;
-        {    
-            //if(*label_box==3)
-            //    track_frame++;
-            //从深度学习中获取model和box; 将目标框与原始图像匹配;
-            if(tracking(my_roi, my_trackbox) < 0.10)
-            {
-                //tracking返回值小0.85，说明目标跟丢了或者有遮挡物体;
-                //应立即停止相机的俯仰和航向， 由前一帧提供模型或者由神经网络提供模型和坐标;
-                snd_uart(fd_uart, 0x32, 1500, 0, 0, 0x31, 1500); //发送相机停止俯仰航向指令;
-                sleep(2);//给深度学习时间，相机控制指令叠加延时性;
-                reset_pid_x_y(); //PID系统参数清零，重新锁定目标;
-                goto loop2;//重新由神经网络提供模型和坐标;
-            }
-            else    //从模板匹配返回中获得图像中目标实际的位置;
-            {
-                //if(*label_box==3)
-                //    saveframe(my_roi, track_frame, "save_frame_insu");
-                //发送向相机控制板发送指令,return 2,相机变焦了;跳转重新读取神经网络提供的模板和坐标;
-                if(send_pid(fd_uart, my_trackbox, camsize_area, &gx[*label_box], label_box) == 2)  
-                    goto loop2;//跳转重新读取神经网络提供的模板和坐标;
-            }      
-            //cv::Point point=getCenterPoint(my_trackbox);
-            //printf("point.x=%d,point.y=%d\n", point.x, point.y);
-        }
-        else 
-        {            
-            mydelay();//10ms;//停止控制相机;
-        }
+                    printf("thr_track pthread_exit\n");
+                    pthread_exit((void *)2);//关机2;    
+                }
+                break;
+            default:
+                {
+                    /******to do something*****/
+                }    
+                break;
+        }  
     }
-
     pthread_cleanup_pop(1);
     pthread_exit(NULL);
 }
