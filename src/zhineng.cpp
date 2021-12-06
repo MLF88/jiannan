@@ -1,11 +1,7 @@
 #include "zhineng.hpp"
 
-
 extern cv::Mat myframe;
 extern pthread_mutex_t mut_myframe;
-
-extern int track_flags;//开启追踪算法并控制相机的标记；1开启，0关闭；
-extern int read_from_learning_flags;//读取神经网络模型的标记变量，0读取，1不读取；
 
 //等待循环；
 void mydelay(void)//10ms忙等待；
@@ -713,7 +709,6 @@ int send_pid(int me_fd, cv::Rect me_trackbox, int *camsize_area, struct target *
         //目标框中点在图像范围中心范围之内；
         snd_uart(me_fd, 0x32, 1500, 0, 0, 0x31, 1500);//发送俯仰和航向停止;
         usleep(50000);
-
         if( (me_trackbox.width>=gx->img_limit[0])||(me_trackbox.height>=gx->img_limit[1]) )
         {
             /**************拍照***********************************/
@@ -735,22 +730,12 @@ int send_pid(int me_fd, cv::Rect me_trackbox, int *camsize_area, struct target *
                 snd_uart(me_fd, 0x04, 0, 0, 0, 0, 0);//拍照;
                 sleep(4);
                 //拍照完成以后要返回到之前的焦距，tx1控制相机变焦有记录；               
-                track_flags=0;
                 snd_uart(me_fd, 0x03, 1200, (camsize_area[0]+1), 0x03, 0, 0);//缩小焦距；
                 camsize_area[0] = 1;  //当前焦距,相机初始化为1倍焦距;
                 cam_resize_tx_count = 0;  //tx所变化的焦距倍数;
                 sleep(7);
-                //变量复位为0；全局变量；读取目标的标记变量；read_from_learning;
-                read_from_learning_flags=0;
                 *label_box=3; //准备下次拍摄绝缘子;
-                for(int k=0; k < 5; k++)
-				{
-					snd_uart(me_fd, 0x04, 1, 0, 0, 0, 0);//拍照完成标记。
-					
-					usleep(100000);
-				}
-				
-
+                return 3;
             }
             else if(*label_box==2)//拍三张下挂点照片;
             {
@@ -764,50 +749,36 @@ int send_pid(int me_fd, cv::Rect me_trackbox, int *camsize_area, struct target *
                 sleep(3);
                 usleep(500000);
                 //拍照完成以后要返回到之前的焦距，tx1控制相机变焦有记录；               
-                track_flags=0;
                 snd_uart(me_fd, 0x03, 1200, (camsize_area[0]+1), 0x03, 0, 0);//缩小焦距；
                 camsize_area[0] = 1;  //当前焦距,相机初始化为1倍焦距;
                 cam_resize_tx_count = 0;  //tx所变化的焦距倍数;
                 sleep(7);
-                //变量复位为0；全局变量；读取目标的标记变量；read_from_learning;
-                read_from_learning_flags=0;
                 *label_box=3; //准备下次拍摄绝缘子;
-                for(int k=0; k < 5; k++)
-				{
-					snd_uart(me_fd, 0x04, 1, 0, 0, 0, 0);//拍照完成标记。
-					
-					usleep(100000);
-				}
-				
+                return 3;
             }
                 
         }  
-        else
-        {
-            /****************自动变焦******************************/
-
-            //需要变的焦距倍数;
-            int resize_comput=cam_size_comput(camsize_area[0], me_trackbox, gx); 
-
-            //printf("camsize_area[0]=%d,resize_comput=%d\n",camsize_area[0],resize_comput);
-            //printf("me_trackbox.height=%d\n",me_trackbox.height);
-            usleep(50000);
-            snd_uart(me_fd, 0x03, 1800, resize_comput, 0x03, 0, 0);//变焦
-            sleep(resize_comput);//等待变焦完成；
-            camsize_area[0] += resize_comput;
-            cam_resize_tx_count += resize_comput;
-            init_pid_param(camsize_area); //焦距和pid同步;
-             
-            return 2;//跳转重新读取神经网络提供的模板和坐标；                    
-        }  
-          
-    }
-	else
-	{   //目标框中心点不在图像中心范围之内，发送pwm值控制相机；
         
-        snd_uart(me_fd, 0x32, pwmx, 0, 0, 0x31, pwmy);//发送控制相机俯仰和航向的指令;
-        //cam_stop_flags=0;
-	}
+        
+        /****************自动变焦******************************/
+        //需要变的焦距倍数;
+        int resize_comput=cam_size_comput(camsize_area[0], me_trackbox, gx); 
+
+        //printf("camsize_area[0]=%d,resize_comput=%d\n",camsize_area[0],resize_comput);
+        //printf("me_trackbox.height=%d\n",me_trackbox.height);
+        usleep(50000);
+        snd_uart(me_fd, 0x03, 1800, resize_comput, 0x03, 0, 0);//变焦
+        sleep(resize_comput);//等待变焦完成；
+        camsize_area[0] += resize_comput;
+        cam_resize_tx_count += resize_comput;
+        init_pid_param(camsize_area); //焦距和pid同步;  
+        return 2;//跳转重新读取神经网络提供的模板和坐标；                    
+    }
+	
+	//目标框中心点不在图像中心范围之内，发送pwm值控制相机；
+    snd_uart(me_fd, 0x32, pwmx, 0, 0, 0x31, pwmy);//发送控制相机俯仰和航向的指令;
+    //cam_stop_flags=0;
+	
     return 0;
 }
 

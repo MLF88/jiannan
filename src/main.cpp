@@ -83,7 +83,7 @@ void *thr_read(void *p)
 }
 
 //从深度学习算法读取目标框;
-int read_from_leaning(Mat &me_roi, Rect &me_trackbox,int me_fd, int *label_box)
+int read_from_leaning(Mat &me_roi, Rect &me_trackbox, int *label_box) 
 {
     int i = *label_box;
 	pthread_mutex_lock(&gx[i].mut_my_gray);//加锁;
@@ -210,14 +210,11 @@ void *thr_track(void *p)
                     if(read_from_learning_flags == 0)//读取模型的标记，只读一次，提供模型;
                     {      
                         snd_uart(fd_uart, 0x32, 1500, 0, 0, 0x31, 1500); //发送相机停止俯仰航向指令;
-                        read_from_leaning_rev = read_from_leaning(my_roi, my_trackbox, fd_uart, label_box);
+                        read_from_leaning_rev = read_from_leaning(my_roi, my_trackbox, label_box);
                         if(read_from_leaning_rev < 0) //返回-2为读取模型失败;
-                        {
-                            read_from_learning_flags == 0;//0为读取，1为不读取;
                             continue;   
-                        }
-                        else           //读取模型成功;
-                            read_from_learning_flags == 1; //0为读取，1为不读取;
+                        //读取模型成功;
+                        read_from_learning_flags == 1; //0为读取，1为不读取;
                     }
                     //开始接手控制相机;
                     //if(*label_box==3)
@@ -232,18 +229,30 @@ void *thr_track(void *p)
                         read_from_learning_flags == 0;//0为读取，1为不读取;
                         continue;//重新由神经网络提供模型和坐标;
                     }
-                    else    //从模板匹配返回中获得图像中目标实际的位置;
-                    {
-                        //if(*label_box==3)
-                        //    saveframe(my_roi, track_frame, "save_frame_insu");
-                        //发送向相机控制板发送指令,return 2,相机变焦了;跳转重新读取神经网络提供的模板和坐标;
-                        if(send_pid(fd_uart, my_trackbox, camsize_area, &gx[*label_box], label_box) == 2) 
+                    //从模板匹配返回中获得图像中目标实际的位置;
+
+                    send_pid_rev = send_pid(fd_uart, my_trackbox, camsize_area, &gx[*label_box], label_box);
+                    switch (send_pid_rev)
+                    { //发送向相机控制板发送指令,return 2,相机变焦了;跳转重新读取神经网络提供的模板和坐标;
+                        case 2://拍照，变焦。
+                            read_from_learning_flags == 0; //0为读取，1为不读取;
+                            continue;                      //跳转重新读取神经网络提供的模板和坐标;
+                        case 3:
                         {
-                            read_from_learning_flags == 0;//0为读取，1为不读取;
-                            continue;//跳转重新读取神经网络提供的模板和坐标;
-                        } 
-                            
-                    }      
+                            track_flags=0;//结束本次动态追踪;
+                            read_from_learning_flags=0;
+                            for(int k=0; k < 5; k++)
+				            {
+					            snd_uart(me_fd, 0x04, 1, 0, 0, 0, 0);//拍照完成标记。
+					            usleep(100000);
+				            }
+                        }
+                        continue;
+                        
+                        default:
+                            continue;
+                    }
+
                     //cv::Point point=getCenterPoint(my_trackbox);
                     //printf("point.x=%d,point.y=%d\n", point.x, point.y);
                 }
@@ -251,7 +260,6 @@ void *thr_track(void *p)
             case 5:
                 {    //接受到结束吊舱的指令;
                     //printf("rcv data from app close process\n");
-			        pthr_flags=1;
                     sleep(1);
                     pthread_cancel(pthr_id[0]); //read;
 
