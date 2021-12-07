@@ -8,11 +8,9 @@
 using namespace cv;
 using namespace std;
 
-
-
  
 int track_flags=0;//开启追踪算法并控制相机的标记; 1开启, 0关闭;
-int read_from_learning_flags;//读取神经网络模型的标记变量，0读取，1不读取;
+int read_dp_flags;//读取神经网络模型的标记变量，0读取，1不读取;
 
 //myframe是从相机取出的视频帧并经过缩放的视频帧, 在程序中三个线程中共享;
 Mat myframe;
@@ -35,6 +33,12 @@ void cleanup_func(void *p)
 
 	puts(ch);
 }
+void cleanup_func_camera(void *p)
+{
+    int cam_fd= *((int *)p);
+    close(cam_fd);
+}
+
 void save_name(char *name)
 {
 	time_t t;		
@@ -53,28 +57,32 @@ void save_name(char *name)
 //从相机中读取视频帧;
 void *thr_read(void *p)
 {
-    char webcam_name[15] = CAM_MY;//相机；
-    const char *ch = "cleanup_thr_read";
-	int h = IMAGEHEIGHT*3/2;
-    pthread_cleanup_push(cleanup_func,(void *)ch);
-    
-    init_device(webcam_name);//初始化摄像头;
+    char webcam_name[15] = CAM_MY;//相机;
+    int *cam_fd;
+    int h = IMAGEHEIGHT*3/2,dev_ret=0;
     Mat bgrImg,yuvImg1;
     yuvImg1.create(h,IMAGEWIDTH,CV_8UC1);
     myframe.create(IMGHEI,IMGWID,CV_8UC3);//输入;
-    //从摄像头读取视频;
+
+    //打开相机
+    dev_ret = init_device(webcam_name);//初始化摄像头;
+    if(dev_ret < 0)
+        fprintf(stderr,"open camera dev is failed\n");
+    cam_fd = &dev_ret;
+    pthread_cleanup_push(cleanup_func_camera,cam_fd);
+         
     while(1)
     {
+        //从摄像头读取视频;
         do
         {
-            bgrImg = read_frame (yuvImg1, bgrImg);//read frame;
+            bgrImg = read_frame(yuvImg1, bgrImg);//read frame;
 
         }while(!bgrImg.empty());
 
         pthread_testcancel();//设置取消点;      
         pthread_mutex_lock(&mut_myframe);//加锁;
-		//frame_input_indexx++;
-        resize(bgrImg,myframe,Size(IMGWID,IMGHEI)); //resize frame;
+        resize(bgrImg,myframe,Size(IMGWID,IMGHEI)); //更新共享视频帧，resize frame;
         pthread_mutex_unlock(&mut_myframe);//解锁;
         pthread_testcancel();//设置取消点;
     }
@@ -83,33 +91,28 @@ void *thr_read(void *p)
 }
 
 //从深度学习算法读取目标框;
-int read_from_leaning(Mat &me_roi, Rect &me_trackbox, int *label_box) 
+int read_dp_unlock(Mat &me_roi, Rect &me_trackbox, int *label_box) 
 {
     int i = *label_box;
-	pthread_mutex_lock(&gx[i].mut_my_gray);//加锁;
+	
 	//判断共享全局变量为空，即被刷新还没有出新的结果;
     if(gx[i].my_gray.empty() )  
     {
         //printf("my_gray is empty \n");
         me_roi.release();
-        usleep(35000);
-        pthread_mutex_unlock(&(gx[i].mut_my_gray));//解锁;    	   
+        usleep(35000); 	   
         return -2;//目标为空;  函数返回
     }
-
     //my_gray(my_learnbox).copyTo(me_roi);
     gx[i].my_gray.copyTo(me_roi);//从全局变量中读取目标截图;
     if(me_roi.empty() )//如果从共享存储空间中读取的目标为空;
     {
         usleep(30000);
-        pthread_mutex_unlock(&(gx[i].mut_my_gray));//解锁;
         return -2;//目标为空; 函数返回;
     }
     else
         me_trackbox=gx[i].my_learnbox;  //读取目标框坐标值;   
-    
-    pthread_mutex_unlock(&(gx[i].mut_my_gray));//解锁;
-    
+
     return 0;
 }
 
@@ -193,7 +196,7 @@ void *thr_track(void *p)
         {
             case 1:     
                 {   //接受到将t_flags设置为0的指令;
-                    read_from_learning_flags = 0;
+                    read_dp_flags = 0;
                     track_flags=0;
                     usleep(20000);
                     snd_uart(fd_uart, 0x32, 1500, 0, 0, 0x31, 1500);
@@ -207,14 +210,16 @@ void *thr_track(void *p)
                     track_flags=1;
                     *label_box = 3;
                     reset_pid_x_y(); 
-                    if(read_from_learning_flags == 0)//读取模型的标记，只读一次，提供模型;
+                    if(read_dp_flags == 0)//读取模型的标记，只读一次，提供模型;
                     {      
                         snd_uart(fd_uart, 0x32, 1500, 0, 0, 0x31, 1500); //发送相机停止俯仰航向指令;
-                        read_from_leaning_rev = read_from_leaning(my_roi, my_trackbox, label_box);
-                        if(read_from_leaning_rev < 0) //返回-2为读取模型失败;
+                        pthread_mutex_lock(&gx[i].mut_my_gray);//加锁;
+                        ret_read_dp = read_dp_unlock(my_roi, my_trackbox, label_box);
+                        pthread_mutex_unlock(&(gx[i].mut_my_gray));//解锁;
+                        if(ret_read_dp < 0) //返回-2为读取模型失败;
                             continue;   
                         //读取模型成功;
-                        read_from_learning_flags == 1; //0为读取，1为不读取;
+                        read_dp_flags == 1; //0为读取，1为不读取;
                     }
                     //开始接手控制相机;
                     //if(*label_box==3)
@@ -226,21 +231,21 @@ void *thr_track(void *p)
                         snd_uart(fd_uart, 0x32, 1500, 0, 0, 0x31, 1500); //发送相机停止俯仰航向指令;
                         sleep(2);//给深度学习时间，相机控制指令叠加延时性;
                         reset_pid_x_y(); //PID系统参数清零，重新锁定目标;
-                        read_from_learning_flags == 0;//0为读取，1为不读取;
+                        read_dp_flags == 0;//0为读取，1为不读取;
                         continue;//重新由神经网络提供模型和坐标;
                     }
                     //从模板匹配返回中获得图像中目标实际的位置;
-
+                    //发送向相机控制板发送指令
                     send_pid_rev = send_pid(fd_uart, my_trackbox, camsize_area, &gx[*label_box], label_box);
                     switch (send_pid_rev)
                     { //发送向相机控制板发送指令,return 2,相机变焦了;跳转重新读取神经网络提供的模板和坐标;
                         case 2://拍照，变焦。
-                            read_from_learning_flags == 0; //0为读取，1为不读取;
+                            read_dp_flags == 0; //0为读取，1为不读取;
                             continue;                      //跳转重新读取神经网络提供的模板和坐标;
                         case 3:
                         {
                             track_flags=0;//结束本次动态追踪;
-                            read_from_learning_flags=0;
+                            read_dp_flags=0;
                             for(int k=0; k < 5; k++)
 				            {
 					            snd_uart(me_fd, 0x04, 1, 0, 0, 0, 0);//拍照完成标记。

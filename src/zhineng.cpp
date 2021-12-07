@@ -36,14 +36,14 @@ cv::Point getCenterPoint(cv::Rect rect)
 }
 
 //初始化串口文件；115200,8位数据，1位停止，没有校验；
-static int set_attr(int me_uart2)
+static int set_attr(int me_uart2, char *bd_rate)
 {
     struct termios newtio;
 	int inputspeed;
 	//int outputspeed;
     tcgetattr(me_uart2,&newtio);
     memset(&newtio,0,sizeof(newtio));
-	inputspeed = cfsetispeed(&newtio,B115200);//设置读波特率115200；
+	inputspeed = cfsetispeed(&newtio,B115200);//设置读波特率115200;
 	if(inputspeed < 0)
 	{
 		perror("cfsetispeed()");
@@ -53,7 +53,7 @@ static int set_attr(int me_uart2)
 	{
 		printf("inputspeed = %d\n",inputspeed);
 	}
-	if(cfsetospeed(&newtio,B115200) < 0) //设置写波特率为115200；
+	if(cfsetospeed(&newtio,B115200) < 0) //设置写波特率为115200;
 	{
 		perror("cfsetospeed()");
 		printf("set speed is error\n");
@@ -62,7 +62,7 @@ static int set_attr(int me_uart2)
 	newtio.c_cflag &= ~CSIZE;
     newtio.c_cflag |= CS8;//设置数据位 为8位，并且使能接收；
     newtio.c_cflag &= ~PARENB;//不进行校验；
-	newtio.c_iflag &= ~INPCK;//不进行校验；
+	newtio.c_iflag &= ~INPCK;//不进行校验;
     newtio.c_cflag &= ~CSTOPB;//1位停止位；
 	newtio.c_cflag &= ~CRTSCTS;//do not use stream control
 	newtio.c_oflag &= ~OPOST;
@@ -72,13 +72,13 @@ static int set_attr(int me_uart2)
     newtio.c_cc[VMIN] = 1;//当接收到一个字节数据就读取；
     newtio.c_cc[VTIME] = 0;//不使用计数器；
     tcflush(me_uart2,TCIOFLUSH); //刷清输入输出缓冲区；
-    tcsetattr(me_uart2,TCSANOW,&newtio);//使用设置的终端属性立即生效
+    tcsetattr(me_uart2,TCSANOW, &newtio);//使用设置的终端属性立即生效
 
 	return 0;
 }
 
 //串口文件打开并初始化设置；return fd;
-int my_uart_init(const char *uart_name)
+int my_uart_init(const char *uart_name, char *bd_rate)
 {
     int fd;
     fd=open(uart_name,O_RDWR|O_NOCTTY|O_NDELAY);
@@ -87,7 +87,7 @@ int my_uart_init(const char *uart_name)
         perror("open()");
         return 0;
     }
-    set_attr(fd);
+    set_attr(fd, bd_rate);
     printf("child_track-do-work(1)\n");
     
     return fd;
@@ -281,20 +281,12 @@ int rcv_uart(int me_uart2,int *camsize_area)
 	unsigned char camdata[11];
 	memset(camdata,0,sizeof(camdata));
     len=read(me_uart2,camdata,10*sizeof(char));
-	if(len<5)
-	{
-        //printf("rcv data from app failed\n");
-		return 0;
-	}
-#if 0
-	for(int i=0;i<9;i++)
-	{
-		printf("camdata[%d]=%d\n",i,camdata[i]);
-	}
-#endif
+    if(len<5)
+        return 0;//rcv data from app failed
+
     return_value=Pact_Analysis(camdata, camsize_area);
 
-	return return_value;
+    return return_value;
 }
 
 static int cam_size_per_call(int max_cam,float per_tar)
@@ -686,49 +678,39 @@ static int box_lim(cv::Point pic1, cv::Point pic2, int area)
 int send_pid(int me_fd, cv::Rect me_trackbox, int *camsize_area, struct target *gx, int *label_box)
 {
     int pwmx,pwmy;//pid参数;
-    
     static int cam_resize_tx_count;//tx控制相机变焦的记录；
-    //static int cam_stop_flags;   //是每一帧目标在画幅中心范围内的标记;
-    //static int cam_resize_flags;   //进入变焦模式的标记；弥补相机变焦没有反馈指示；
+    
     //pic1原始图像中心点，pic2目标框中心点;
     cv::Point pic2;
     static cv::Point pic1 = cv::Point((IMGWID/2),(IMGHEI/2));
 
     pic2 = getCenterPoint(me_trackbox);
 	
-    //x 轴方向，pic2.x 目标框中心点x轴坐标值，pic1.x 目标框中心点x轴中心点坐标值，返回pwm值，
-    pwmx = pid_controler_x(pic2.x, pic1.x, camsize_area[1]);
-    //y 轴方向，pic1.y 目标框中心点x轴坐标值，pic1.y 目标框中心点y轴中心点坐标值，返回pwm值;
-    pwmy = pid_controler_y(pic2.y, pic1.y, camsize_area[1]);
-
-    //printf("pwmx=%d,pwmy=%d\n",pwmx,pwmy);
-	//printf("pic2.x=%d,pic2.y=%d,pwmx=%d,pwmy=%d\n",pic2.x,pic2.y,pwmx,pwmy);
     //目标中心点是否在画幅中心点范围内;
     if(box_lim(pic1, pic2, camsize_area[1]) == 1)
 	{
-        //目标框中点在图像范围中心范围之内；
-        snd_uart(me_fd, 0x32, 1500, 0, 0, 0x31, 1500);//发送俯仰和航向停止;
+        //目标框中点在图像范围中心范围之内;发送俯仰和航向停止;
+        snd_uart(me_fd, 0x32, 1500, 0, 0, 0x31, 1500);
         usleep(50000);
+        //判断目标框是否符合拍照的标准的。
         if( (me_trackbox.width>=gx->img_limit[0])||(me_trackbox.height>=gx->img_limit[1]) )
         {
             /**************拍照***********************************/
+            snd_uart(me_fd, 0x04, 0, 0, 0, 0, 0);//拍照;
+            sleep(4);
+
             if(*label_box==3)//拍一张绝缘子照片;
             {
                 //绝缘子;
-                snd_uart(me_fd, 0x04, 0, 0, 0, 0, 0);//拍照;
-                sleep(3);
-                usleep(500000);
                 *label_box=2; //准备下次拍摄下挂点;
                 //移动至下挂点，并放大8倍焦距;
                 insulator_cam(me_fd, me_trackbox, camsize_area, MANUCAM);
-                cam_resize_tx_count +=MANUCAM;
+                cam_resize_tx_count += MANUCAM;
                 init_pid_param(camsize_area); //焦距和pid同步;
                 return 2;//跳转重新读取神经网络提供的模板和坐标;
             }
             else if(*label_box==4)
             {
-                snd_uart(me_fd, 0x04, 0, 0, 0, 0, 0);//拍照;
-                sleep(4);
                 //拍照完成以后要返回到之前的焦距，tx1控制相机变焦有记录；               
                 snd_uart(me_fd, 0x03, 1200, (camsize_area[0]+1), 0x03, 0, 0);//缩小焦距；
                 camsize_area[0] = 1;  //当前焦距,相机初始化为1倍焦距;
@@ -739,15 +721,6 @@ int send_pid(int me_fd, cv::Rect me_trackbox, int *camsize_area, struct target *
             }
             else if(*label_box==2)//拍三张下挂点照片;
             {
-                //下挂点;
-                for(int j=0; j<2; j++)
-	            {
-                    snd_uart(me_fd, 0x04, 0, 0, 0, 0, 0);//拍照;
-		            sleep(4);
-                }
-                snd_uart(me_fd, 0x04, 0, 0, 0, 0, 0);//拍照;
-                sleep(3);
-                usleep(500000);
                 //拍照完成以后要返回到之前的焦距，tx1控制相机变焦有记录；               
                 snd_uart(me_fd, 0x03, 1200, (camsize_area[0]+1), 0x03, 0, 0);//缩小焦距；
                 camsize_area[0] = 1;  //当前焦距,相机初始化为1倍焦距;
@@ -755,25 +728,25 @@ int send_pid(int me_fd, cv::Rect me_trackbox, int *camsize_area, struct target *
                 sleep(7);
                 *label_box=3; //准备下次拍摄绝缘子;
                 return 3;
-            }
-                
+            }           
         }  
-        
         
         /****************自动变焦******************************/
         //需要变的焦距倍数;
         int resize_comput=cam_size_comput(camsize_area[0], me_trackbox, gx); 
-
         //printf("camsize_area[0]=%d,resize_comput=%d\n",camsize_area[0],resize_comput);
         //printf("me_trackbox.height=%d\n",me_trackbox.height);
-        usleep(50000);
         snd_uart(me_fd, 0x03, 1800, resize_comput, 0x03, 0, 0);//变焦
-        sleep(resize_comput);//等待变焦完成；
+        sleep(resize_comput);//等待变焦完成;
         camsize_area[0] += resize_comput;
         cam_resize_tx_count += resize_comput;
         init_pid_param(camsize_area); //焦距和pid同步;  
         return 2;//跳转重新读取神经网络提供的模板和坐标；                    
     }
+    //x 轴方向，pic2.x 目标框中心点x轴坐标值，pic1.x 目标框中心点x轴中心点坐标值，返回pwm值，
+    pwmx = pid_controler_x(pic2.x, pic1.x, camsize_area[1]);
+    //y 轴方向，pic1.y 目标框中心点x轴坐标值，pic1.y 目标框中心点y轴中心点坐标值，返回pwm值;
+    pwmy = pid_controler_y(pic2.y, pic1.y, camsize_area[1]);
 	
 	//目标框中心点不在图像中心范围之内，发送pwm值控制相机；
     snd_uart(me_fd, 0x32, pwmx, 0, 0, 0x31, pwmy);//发送控制相机俯仰和航向的指令;

@@ -25,11 +25,12 @@ struct target
     //目标框得分连续累计;
 	float my_box_score;//每一帧距离中心点最近目标框得分连续累计;
     float score_limit; 
-    float image_lim[2]; //画框的比例;
+    float image_lim[2];//画框的比例;
     int img_limit[2];   
     //互斥量;
     pthread_mutex_t mut_my_gray;   
 };
+
 void saveframe(cv::Mat img, int frame_index,char *savename, char *path);
 int test(void) ;
 
