@@ -21,7 +21,7 @@ struct target
     //在深度学习中输出结果中感兴趣区域的目标框;
     cv::Rect my_learnbox;  //全局变量;
     //my_gray,是深度学习检测输出的视频帧,在learning和track进程中共享视频帧;
-    cv::Mat my_gray; // 全局变量;
+    cv::Mat my_gray; //全局变量;
     //目标框得分连续累计;
 	float my_box_score;//每一帧距离中心点最近目标框得分连续累计;
     float score_limit; 

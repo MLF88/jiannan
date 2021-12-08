@@ -35,50 +35,141 @@ cv::Point getCenterPoint(cv::Rect rect)
 	return cpt;
 }
 
-//初始化串口文件；115200,8位数据，1位停止，没有校验；
-static int set_attr(int me_uart2, char *bd_rate)
+//初始化串口文件；115200,8n1,8位数据，1位停止，没有校验；
+//me_uart2:文件描述符，nSpeed:设置波特率(115200,9600),nBits:数据位数（8代表8数据位置）
+//nStop：停止位数（1,代表1停止位）;nEvent:数据校验（N:不校验,E：偶校验,O：奇数校验）
+int set_attr(int me_uart2, int nSpeed, int nBits, int nStop, char nEvent)
 {
-    struct termios newtio;
-	int inputspeed;
-	//int outputspeed;
+    struct termios newtio,oldtio;
+
     tcgetattr(me_uart2,&newtio);
-    memset(&newtio,0,sizeof(newtio));
-	inputspeed = cfsetispeed(&newtio,B115200);//设置读波特率115200;
-	if(inputspeed < 0)
-	{
-		perror("cfsetispeed()");
-		printf("set speed is error\n");
-	}
-	else
-	{
-		printf("inputspeed = %d\n",inputspeed);
-	}
-	if(cfsetospeed(&newtio,B115200) < 0) //设置写波特率为115200;
-	{
-		perror("cfsetospeed()");
-		printf("set speed is error\n");
+    //保存现有的串口参数设置,以备完成任务后回复原来的状态;
+    if(tcgetattr(me_uart2, &oldtio) != 0)
+    {//报错
+        perror();
+        return -1;
     }
+    memset(&newtio,0,sizeof(newtio));
+
+    //设置数据位;
+    switch(nBits)
+    {
+        case 7:
+            newtio.c_cflag |= CS7
+            break;
+        case 8:
+            newtio.c_cflag |= CS8;//设置数据位 为8位，并且使能接收;
+            break;
+        default:
+            fprintf(stderr,"set nbits invalid parameter value\n");
+            return -1;
+    }
+    //设置字符大小;
     newtio.c_cflag |= (CLOCAL | CREAD);
 	newtio.c_cflag &= ~CSIZE;
-    newtio.c_cflag |= CS8;//设置数据位 为8位，并且使能接收；
-    newtio.c_cflag &= ~PARENB;//不进行校验；
-	newtio.c_iflag &= ~INPCK;//不进行校验;
-    newtio.c_cflag &= ~CSTOPB;//1位停止位；
-	newtio.c_cflag &= ~CRTSCTS;//do not use stream control
+    switch(nEvent)
+    {
+        case 'N':  //不进行校验;
+            newtio.c_cflag &= ~PARENB;
+            newtio.c_iflag &= ~INPCK;
+            break;
+
+        case 'E': //偶数校验        
+            newtio.c_ccflag |= PARENB;
+            newtio.c_ccflag &= ~PARODD;
+            newtio.c_icflag |= (INPCK | ISTRIP);
+            break;
+        case 'O': //奇数校验;  
+            newtio.c_ccflag |= PARENB;
+            newtio.c_ccflag |= PARODD;
+            newtio.c_icflag |= (INPCK | ISTRIP);
+            break;
+        default :
+            fprintf(stderr,"set nevent is invalid parameter value\n");
+            return -1;
+    }
+    
+    //设置停止位;
+    switch(nStop)
+    {
+        case 1:
+            newtio.c_cflag &= ~CSTOPB;//1位停止位；
+            break;
+        case 2:
+            newtio.c_cflag |= CSTOPB;//2位停止位;
+            break;
+        default:
+            fprintf(stderr,"set ntsop invalid parameter value\n");
+            return -1;
+    }
+    newtio.c_cflag &= ~CRTSCTS;//do not use stream control
 	newtio.c_oflag &= ~OPOST;
 	newtio.c_lflag &= ~(ICANON|ECHO|ECHOE|ISIG);
 	newtio.c_oflag &= ~(ONLCR|OCRNL);
-	newtio.c_iflag &= ~(INLCR|ICRNL|IGNCR);
+    newtio.c_iflag &= ~(INLCR|ICRNL|IGNCR);
+    // 设置等待时间和最小接收字符
     newtio.c_cc[VMIN] = 1;//当接收到一个字节数据就读取；
     newtio.c_cc[VTIME] = 0;//不使用计数器；
-    tcflush(me_uart2,TCIOFLUSH); //刷清输入输出缓冲区；
-    tcsetattr(me_uart2,TCSANOW, &newtio);//使用设置的终端属性立即生效
+
+    //设置数据传输率,波特率;
+# if 1
+    speed_t speed_arr[] = {B115200,B57600,B38400,B19200,B9600};
+    int speed_label[] = {115200,57600,38400,19200,9600};
+    for(i=0; i<sizeof(speed_arr)/sizeof(speed_t); i++)//for 循环遍历数组需找下标
+    {
+        if(nSpeed == speed_label[i]) //判断是否与设置的波特率相等
+        {
+            if(cfsetispeed(&newtio, speed_arr[i]) < 0);//设置写波特率;
+            {   
+                perror("cfsetispeed()");
+                return -1;
+            }
+            if(cfsetospeed(&newtio, speed_arr[i]) < 0);//设置读波特率;
+            {
+                perror("cfsetospeed()");
+                return -1;
+            }
+        }
+    }
+#else
+    switch(nSpeed)
+    {
+        case 9600:
+            cfsetispeed(&newtio, B9600);
+            cfsetospeed(&newtio, B9600);
+            break;
+        case 19200:
+            cfsetispeed(&newtio, B19200);
+            cfsetospeed(&newtio, B19200);
+            break;
+        case 38400:
+            cfsetispeed(&newtio, B38400);
+            cfsetospeed(&newtio, B38400);
+        case 57600:
+            cfsetispeed(&newtio, B57600);
+            cfsetospeed(&newtio, B57600);
+        case 115200:
+            cfsetispeed(&newtio, B115200);
+            cfsetospeed(&newtio, B115200);
+        default:
+            fprintf(stderr,"set nspeed is invalid parameter value\n");
+            return -1;
+    }
+#endif
+	
+    tcflush(me_uart2,TCIOFLUSH); //刷清输入输出缓冲区;
+    //使用设置的终端属性立即生效
+    if(tcsetattr(me_uart2,TCSANOW, &newtio) != 0);
+    {
+        perror("set com is error");
+        return -1;
+    }
 
 	return 0;
 }
 
 //串口文件打开并初始化设置；return fd;
-int my_uart_init(const char *uart_name, char *bd_rate)
+int my_uart_open(const char *uart_name)
 {
     int fd;
     fd=open(uart_name,O_RDWR|O_NOCTTY|O_NDELAY);
@@ -87,9 +178,6 @@ int my_uart_init(const char *uart_name, char *bd_rate)
         perror("open()");
         return 0;
     }
-    set_attr(fd, bd_rate);
-    printf("child_track-do-work(1)\n");
-    
     return fd;
 }
 
@@ -216,11 +304,11 @@ int Pact_Analysis(unsigned char *pact, int *camsize_area)
 		{
 			if(pact[2] == 0x20) //接收开始追踪信号，
 			{
-                if(pact[3] == 0x01) //
+                if(pact[3] == 0x01) //结束目标追踪并标记设置0
                 {
                     return 1;
                 }
-                else if(pact[3] == 0x00) //
+                else if(pact[3] == 0x00) //开启目标追踪并标记设置1;
                 {
                     return 2;
                 }
@@ -233,7 +321,7 @@ int Pact_Analysis(unsigned char *pact, int *camsize_area)
                     return pact[3];
                 }				
 			} 
-			else if(pact[2] == 0x03)//接收变焦倍数,重置pid参数；
+			else if(pact[2] == 0x03)//接收变焦倍数,重置pid参数;
 			{
                 pwm_zoom = pact[3] * 256 + pact[4];
 
@@ -267,7 +355,8 @@ int Pact_Analysis(unsigned char *pact, int *camsize_area)
                 debug_pid(pact[2],pact[4],pact[5]);
             }
         }
-	}
+    }
+    
 	return 0;
 }
 

@@ -136,8 +136,25 @@ void *thr_track(void *p)
     Rect my_trackbox;
     //在追踪匹配线程中从深度学习线程截取为my_roi感兴趣区域,作为追踪匹配的感兴趣区域;
     Mat my_roi; 
-    //创建并初始化串口;
-    fd_uart=my_uart_init(UART2);
+    //创建并初始化串口;如果失败则召回其他线程,并退出本线程;
+    fd_uart=my_uart_open(UART2);
+    if(fd_uart < 0)
+    {
+        pthread_cancel(pthr_id[0]);
+        pthread_cancel(pthr_id[2]);
+        pthread_exit(NULL);
+    }
+    // 设置串口属性参数,115200,8n1,8位数据位，1位停止位，无校验;
+    //me_uart2:文件描述符，nSpeed:设置波特率(115200,9600),nBits:数据位数（8代表8数据位置）
+    //nStop：停止位数（1,代表1停止位）;nEvent:数据校验（N:不校验,E：偶校验,O：奇数校验）   
+    if(set_attr(fd_uart, 115200, 8, 1, N) < 0)
+    {
+        close(fd_uart);
+        pthread_cancel(pthr_id[0]);
+        pthread_cancel(pthr_id[2]);
+        pthread_exit(NULL);
+    }
+    
 
     gx[1].score_limit = 2*MY_SCORE_TOWE;
     gx[1].image_lim[0] = IMGWID_LIMIT_TOWE;

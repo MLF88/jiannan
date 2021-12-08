@@ -8,10 +8,10 @@
 #define IMGHEI_LIMIT_TOWE 0.6
 
 #define IMGWID_LIMIT_INSU 0.5  //设定绝缘子目标框的边界; 0.7,0.6,0.5
-#define IMGHEI_LIMIT_INSU 0.5  //  
+#define IMGHEI_LIMIT_INSU 0.5   
 
-#define IMGWID_LIMIT_HANG 0.4 //设定下挂点目标框的边界; 0.7,0.6,0.5
-#define IMGHEI_LIMIT_HANG 0.4
+#define IMGWID_LIMIT_HANG 0.4  //设定下挂点目标框的边界; 0.7,0.6,0.5
+#define IMGHEI_LIMIT_HANG 0.4   
 
 #define IMGWID_LIMIT_NEST 0.2 //设定下鸟巢目标框的边界; 0.7,0.6,0.5
 #define IMGHEI_LIMIT_NEST 0.2

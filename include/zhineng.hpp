@@ -23,7 +23,11 @@ void printf_time(clock_t);
 cv::Point getCenterPoint(cv::Rect rect);
 
 //串口文件打开并初始化设置；return fd;
-int my_uart_init(const char *uart_name);
+int my_uart_open(const char *uart_name);
+//初始化串口文件；115200,8n1,8位数据，1位停止，没有校验；
+//me_uart2:文件描述符，nSpeed:设置波特率(115200,9600),nBits:数据位数（8代表8数据位置）
+//nStop：停止位数（1,代表1停止位）;nEvent:数据校验（N:不校验,E：偶校验,O：奇数校验）
+int set_attr(int me_uart2, int nSpeed, int nBits, int nStop, char nEvent);
 
 //控制相机俯仰，航向；0x01：俯仰，0x02：航向，0x03:变焦，0x04:拍照；0x05:关机；
 //fd: 串口文件；cmd：控制命令（俯仰，航向）；data: pid参数值；camdata: 一组串口数据；int size: 变焦倍数；
