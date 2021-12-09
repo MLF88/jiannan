@@ -73,6 +73,7 @@ void reset_pid_x_y(void)
     output_pid_y = 0;
 }
 
+//debug_pid(pact[2],pact[4],pact[5]);调试pid 的函数
 void debug_pid(char cmd, char datah,char datal)
 {
     int data_m = ((datah << 8)|datal);

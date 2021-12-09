@@ -183,57 +183,57 @@ int my_uart_open(const char *uart_name)
 
 //发送数据;
 //控制相机俯仰，航向；0x31：俯仰，0x32：航向，0x03:变焦 加入ID，0x04:拍照；0x05:关机；
-//fd: 串口文件；cmd：控制命令（俯仰，航向）；data: pid参数值；camdata: 一组串口数据；int size: 变焦倍数；
-//将俯仰和航向数据一起发送；
-//发送给app识别目标的标志；
-int snd_uart(int me_uart2, unsigned char cmd, int data, int size, unsigned char id, unsigned char cmd2, int data2)
+//fd: 串口文件；cmd：控制命令（俯仰，航向）；data: pid参数值；camdata: 一组串口数据;int iCamFocLen: 变焦倍数；
+//将俯仰和航向数据一起发送;
+//发送给app识别目标的标志;
+int snd_uart(int me_uart2,unsigned char byCmd,int iPidData, int iCamFocLen,unsigned char byId,unsigned char byCmdOption,int data2)
 {
     int len;
     unsigned char camdata[15];
     memset(camdata,0,sizeof(camdata));
     camdata[0]=0xa5;
-    camdata[2]=cmd;
-    if(cmd2 == 0)   //发送单指令;变焦，拍照，拍照完成回馈指令，俯仰航向；
+    camdata[2]=byCmd;
+    if(bySendOption == 0)   //发送单指令;变焦，拍照，拍照完成回馈指令，俯仰航向；
     {
-        unsigned char c1 = data&0xff;//l;
-        unsigned char c2 = (data >> 8)&0xff;//h;
-        unsigned char c3 = size&0xff;//l,camsize;
+        unsigned char c1 = iPidData&0xff;//l;
+        unsigned char c2 = (iPidData >> 8)&0xff;//h;
+        unsigned char c3 = iCamFocLen&0xff;//l, 相机焦距;
     
-        switch (cmd)
+        switch (byCmd)
         {
             //航向，俯仰；
             case 49:
             case 50:
-                camdata[1]=(sizeof(c1)+sizeof(c2)+sizeof(cmd));
+                camdata[1]=(sizeof(c1)+sizeof(c2)+sizeof(byCmd));
                 camdata[3]=c2;
                 camdata[4]=c1;
-                camdata[5]=((cmd+c1+c2)/256);
-                camdata[6]=((cmd+c1+c2)%256);
+                camdata[5]=((byCmd+c1+c2)/256);
+                camdata[6]=((byCmd+c1+c2)%256);
                 
                 break;
             //变焦；
             case 3:
-                camdata[1]=(sizeof(c1)+sizeof(c2)+sizeof(c3)+sizeof(cmd)+sizeof(id));
+                camdata[1]=(sizeof(c1)+sizeof(c2)+sizeof(c3)+sizeof(byCmd)+sizeof(byId));
                 camdata[3]=c2;
                 camdata[4]=c1;
                 camdata[5]=c3;
-                camdata[6]=id;
-                camdata[7]=((cmd+c1+c2+c3+id)/256);
-                camdata[8]=((cmd+c1+c2+c3+id)%256);
+                camdata[6]=byId;
+                camdata[7]=((byCmd+c1+c2+c3+byId)/256);
+                camdata[8]=((byCmd+c1+c2+c3+byId)%256);
                 break;
             //拍照,关机；拍照完成回馈指令；
             case 4:
-                camdata[1]=(sizeof(cmd)+sizeof(cmd));
-                camdata[3]=data;//0x00;
-                camdata[4]=((cmd+data)/256);
-                camdata[5]=((cmd+data)%256);
+                camdata[1]=(sizeof(byCmd)+sizeof(byCmd));
+                camdata[3]=iPidData;//0x00;
+                camdata[4]=((byCmd+data)/256);
+                camdata[5]=((byCmd+data)%256);
                 break;
             //发送给app的目标识别的数量；
             case 33:
-                camdata[1]=(sizeof(cmd)+sizeof(cmd));
-                camdata[3]=data;
-                camdata[4]=((cmd+data)/256);
-                camdata[5]=((cmd+data)%256);
+                camdata[1]=(sizeof(byCmd)+sizeof(byCmd));
+                camdata[3]=iPidData;
+                camdata[4]=((byCmd+iPidData)/256);
+                camdata[5]=((byCmd+iPidData)%256);
                 break;
 
             default:
@@ -248,26 +248,26 @@ int snd_uart(int me_uart2, unsigned char cmd, int data, int size, unsigned char 
         }
         return 0;
     }
-    else            //发送俯仰和航向双指令；
+    else            //发送俯仰和航向双指令;
     {
-        unsigned char c1 = data&0xff;//l;
-        unsigned char c2 = (data >> 8)&0xff;//h;
+        unsigned char c1 = iPidData&0xff;//l;
+        unsigned char c2 = (iPidData >> 8)&0xff;//h;
         unsigned char c3 = data2&0xff;//l;
         unsigned char c4 = (data2 >> 8)&0xff;//h;
     
-        camdata[1]=(sizeof(c1)+sizeof(c2)+sizeof(cmd));
+        camdata[1]=(sizeof(c1)+sizeof(c2)+sizeof(byCmd));
         camdata[3]=c2;
         camdata[4]=c1;
-        camdata[5]=((cmd+c1+c2)/256);
-        camdata[6]=((cmd+c1+c2)%256);
+        camdata[5]=((byCmd+c1+c2)/256);
+        camdata[6]=((byCmd+c1+c2)%256);
     
         camdata[7]=0xa5;
         camdata[8]=camdata[1];
-        camdata[9]=cmd2;
+        camdata[9]=bySendOption;
         camdata[10]=c4;
         camdata[11]=c3;
-        camdata[12]=((cmd2+c3+c4)/256);
-        camdata[13]=((cmd2+c3+c4)%256);
+        camdata[12]=((bySendOption+c3+c4)/256);
+        camdata[13]=((bySendOption+c3+c4)%256);
         
         len = write(me_uart2, camdata, sizeof(camdata));
         if(len < 13)
@@ -279,21 +279,13 @@ int snd_uart(int me_uart2, unsigned char cmd, int data, int size, unsigned char 
     }
     
 }
-
-//分析数据;
 //Pact_Analysis 返回值为5时代表要结束吊舱程序;
-//return 5,结束吊舱；return 6,关闭TX1电源；
-//return 1,结束目标追踪并标记设置0,return 2,开启目标追踪并标记设置1;
-
-int Pact_Analysis(unsigned char *pact, int *camsize_area)
+//pact[3]为0x01结束目标追踪,0x00开启目标追踪,0x05结束吊舱程序,0x06关闭TX1电源;
+int Pact_Analysis(unsigned char *pact)
 {
 	int check = 0;
     int i = 0;
-    int pwm_zoom;
-    int cmdata = camsize_area[0];
     
-    //int *cmsize_are = camsize_area;
-
 	if(pact[0] == 0xa5)
 	{
 		for(i = 0; i < pact[1]; i++)
@@ -302,57 +294,15 @@ int Pact_Analysis(unsigned char *pact, int *camsize_area)
 		}
 		if(((check / 256) == pact[pact[1] + 2]) && ((check % 256) == pact[pact[1] + 3]))
 		{
-			if(pact[2] == 0x20) //接收开始追踪信号，
-			{
-                if(pact[3] == 0x01) //结束目标追踪并标记设置0
-                {
-                    return 1;
-                }
-                else if(pact[3] == 0x00) //开启目标追踪并标记设置1;
-                {
-                    return 2;
-                }
-                else if(pact[3] == 0x05)//结束吊舱程序;
-                {
-                    return pact[3];
-                }
-                else if(pact[3] == 0x06)//关闭TX1电源；
-                {
-                    return pact[3];
-                }				
-			} 
-			else if(pact[2] == 0x03)//接收变焦倍数,重置pid参数;
-			{
-                pwm_zoom = pact[3] * 256 + pact[4];
-
-                if(pwm_zoom == 1200)  //缩小焦距;
-                {
-                    if((cmdata - pact[5]) > 0)
-                        cmdata -= pact[5];
-					else if((cmdata - pact[5]) <= 0)
-                        cmdata = 1;
-
-                    camsize_area[0] = cmdata;    
-                    init_pid_param(camsize_area);
-                    printf("cmdata=%d\n",cmdata);
-                    return 0;
-                }
-                else if(pwm_zoom == 1800) //放大焦距;
-                {   
-					if((cmdata + pact[5]) < 30)
-                        cmdata += pact[5];	
-					else if((cmdata + pact[5]) >= 30)
-                        cmdata = 30;
-
-                    camsize_area[0] = cmdata;    
-                    init_pid_param(camsize_area);	   		 
-                    printf("cmdata=%d\n",cmdata);
-                    return 0;
-                }
-            }
-             else 
+            switch(pact[2])
             {
-                debug_pid(pact[2],pact[4],pact[5]);
+                case 0x20:     //接收开始追踪信号
+                    return (pact[3]+1);
+                case 0x30:     //接收变焦倍数,重置pid参数;
+                    return pact[2];
+                default:
+                    fprintf(stderr,"uart rcv data analysis is failed\n");
+                    return -1;
             }
         }
     }
@@ -363,14 +313,13 @@ int Pact_Analysis(unsigned char *pact, int *camsize_area)
 //接受数据;
 //return 5,结束吊舱；return 6,关闭TX1电源；
 //return 1,结束目标追踪并标记设置0,return 2,开启目标追踪并标记设置1;
-int rcv_uart(int me_uart2,int *camsize_area)
+int rcv_uart(int me_uart2, unsigned char *uart_rcv_buf)
 {
     int return_value;
 	int len;
-	unsigned char camdata[11];
-	memset(camdata,0,sizeof(camdata));
-    len=read(me_uart2,camdata,10*sizeof(char));
-    if(len<5)
+	
+	memset(uart_rcv_buf,0,sizeof(uart_rcv_buf));
+    if(read(me_uart2,uart_rcv_buf,10*sizeof(unsigned char)) < 5);
         return 0;//rcv data from app failed
 
     return_value=Pact_Analysis(camdata, camsize_area);
